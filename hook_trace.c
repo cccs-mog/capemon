@@ -22,13 +22,13 @@ extern void DebugOutput(_In_ LPCTSTR lpOutputString, ...);
 void string_to_sid(PISID pSid,LPWSTR *pstr) {
     DWORD sz, i;
     LPWSTR str;
-    WCHAR fmt[] = { 
-        'S','-','%','u','-','%','2','X','%','2','X','%','X','%','X','%','X','%','X',0 };
-    WCHAR subauthfmt[] = { '-','%','u',0 };
+	//WCHAR fmt[] = { 
+    //    'S','-','%','u','-','%','2','X','%','2','X','%','X','%','X','%','X','%','X',0 };
+	//#WCHAR subauthfmt[] = { '-','%','u',0 };
 
     sz = 14 + pSid->SubAuthorityCount * 11;
     str = malloc(sz*sizeof(WCHAR) );
-    sprintf( str, fmt, pSid->Revision, 
+    sprintf((char *)str, "S-%u-%2X%2X%X%X%X%X", pSid->Revision,
         pSid->IdentifierAuthority.Value[2],
         pSid->IdentifierAuthority.Value[3],
         pSid->IdentifierAuthority.Value[0]&0x0f,
@@ -36,9 +36,8 @@ void string_to_sid(PISID pSid,LPWSTR *pstr) {
         pSid->IdentifierAuthority.Value[1]&0x0f,
         pSid->IdentifierAuthority.Value[5]&0x0f);
     for( i=0; i<pSid->SubAuthorityCount; i++ )
-        sprintf( str + strlen(str), subauthfmt, pSid->SubAuthority[i] );
+        sprintf((char *)(str + strlen((const char *)str)), "-%u", pSid->SubAuthority[i] );
     *pstr = str;
-    return TRUE;
 }
 
 void string_to_guid(char * s,GUID guid) {
@@ -84,7 +83,7 @@ HOOKDEF(ULONG, WINAPI, ControlTraceA,
             if(Properties->LogFileNameOffset != 0){
                 char *NewLogFileName = NULL;
                 NewLogFileName = malloc(sizeof(char)*1025);
-                strncpy(NewLogFileName, &Properties + Properties->LogFileNameOffset, strlen(&Properties + Properties->LogFileNameOffset) + 1);
+                strncpy(NewLogFileName, (void *)(&Properties + Properties->LogFileNameOffset), strlen((const char *)(&Properties + Properties->LogFileNameOffset) + 1));
                 LOQ_zero("Trace", "issis","TraceHandle", TraceHandle,"InstanceName", InstanceName,"ControlCode", ControlValue,"EnableFlags", Properties->EnableFlags, "NewLogFileName", NewLogFileName ); 
                 free(NewLogFileName);
             }
@@ -136,7 +135,7 @@ HOOKDEF(ULONG, WINAPI, ControlTraceW,
             if(Properties->LogFileNameOffset != 0){
                 char *NewLogFileName = NULL;
                 NewLogFileName = malloc(sizeof(char)*1025);
-                strncpy(NewLogFileName, &Properties + Properties->LogFileNameOffset, strlen(&Properties + Properties->LogFileNameOffset) + 1);
+                strncpy(NewLogFileName, (void *)(&Properties + Properties->LogFileNameOffset), strlen((const char *)(&Properties + Properties->LogFileNameOffset) + 1));
                 LOQ_zero("Trace", "iusis","TraceHandle", TraceHandle,"InstanceName", InstanceName,"ControlCode", ControlValue,"EnableFlags", Properties->EnableFlags, "NewLogFileName", NewLogFileName ); 
                 free(NewLogFileName);
             }
@@ -373,7 +372,7 @@ HOOKDEF(ULONG, WINAPI, UpdateTraceA,
 	if(Properties->LogFileNameOffset != 0){
         char *NewLogFileName = NULL;
         NewLogFileName = malloc(sizeof(char)*1025);
-        strncpy(NewLogFileName, &Properties + Properties->LogFileNameOffset, strlen(&Properties + Properties->LogFileNameOffset) + 1);
+        strncpy(NewLogFileName, (void *)(&Properties + Properties->LogFileNameOffset), strlen((const char *)(&Properties + Properties->LogFileNameOffset) + 1));
         LOQ_zero("Trace", "isis","TraceHandle", TraceHandle,"InstanceName", InstanceName,"EnableFlags", Properties->EnableFlags, "NewLogFileName", NewLogFileName ); 
         free(NewLogFileName);
     }
@@ -392,7 +391,7 @@ HOOKDEF(ULONG, WINAPI, UpdateTraceW,
 	if(Properties->LogFileNameOffset != 0){
         char *NewLogFileName = NULL;
         NewLogFileName = malloc(sizeof(char)*1025);
-        strncpy(NewLogFileName, &Properties + Properties->LogFileNameOffset, strlen(&Properties + Properties->LogFileNameOffset) + 1);
+        strncpy(NewLogFileName, (void *)(&Properties + Properties->LogFileNameOffset), strlen((const char *)(&Properties + Properties->LogFileNameOffset) + 1));
         LOQ_zero("Trace", "iuis","TraceHandle", TraceHandle,"InstanceName", InstanceName,"EnableFlags", Properties->EnableFlags, "NewLogFileName", NewLogFileName ); 
         free(NewLogFileName);
     }
@@ -422,10 +421,10 @@ HOOKDEF(ULONG, WINAPI, EventAccessControl,
 	char *S_GUID = NULL;
     S_GUID = malloc(sizeof(char)*(GUID_SIZE+1));
     string_to_guid(S_GUID,*Guid);
-    WCHAR *S_SID = NULL;
+    LPWSTR S_SID = NULL;
 	PISID SID_Struct = Sid;
     S_SID = malloc((14 + SID_Struct->SubAuthorityCount * 11)*sizeof(WCHAR));
-    string_to_sid(Sid,S_SID);
+    string_to_sid(Sid,&S_SID);
 	LOQ_zero("Trace", "sluli", "GUID", S_GUID, "Operation", Operation, "SID", S_SID, "Rights", Rights, "Allow_OR_Deny", AllowOrDeny);
     free(S_SID);
 	return ret;
