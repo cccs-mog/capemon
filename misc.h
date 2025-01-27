@@ -73,6 +73,9 @@ typedef NTSTATUS(WINAPI *_RtlEqualUnicodeString)(
 	const PUNICODE_STRING String1,
 	const PUNICODE_STRING String2,
 	BOOLEAN CaseInSensitive);
+typedef VOID (WINAPI *_RtlInitUnicodeString)(
+    PUNICODE_STRING DestinationString,
+    PCWSTR SourceString);
 typedef struct _LDR_DLL_LOADED_NOTIFICATION_DATA {
 	ULONG Flags;
 	const PUNICODE_STRING FullDllName;
@@ -147,12 +150,9 @@ void hide_module_from_peb(HMODULE module_handle);
 BOOLEAN is_suspended(DWORD pid, DWORD tid);
 BOOLEAN parent_has_path(char* path);
 BOOLEAN can_open_parent();
-
-uint32_t path_from_handle(HANDLE handle,
-	wchar_t *path, uint32_t path_buffer_len);
-
-uint32_t path_from_object_attributes(const OBJECT_ATTRIBUTES *obj,
-	wchar_t *path, uint32_t buffer_length);
+uint32_t path_from_handle(HANDLE handle, wchar_t *path, uint32_t path_buffer_len);
+uint32_t path_from_object_attributes(const OBJECT_ATTRIBUTES *obj, wchar_t *path, uint32_t buffer_length);
+BOOL is_path_from_object_attributes(const OBJECT_ATTRIBUTES *obj, wchar_t *path);
 
 struct {
 	wchar_t *hkcu_string;
@@ -178,11 +178,17 @@ int is_shutting_down();
 
 #define MAX_KEY_BUFLEN ((16384 + 256) * sizeof(WCHAR))
 
+#ifndef INET_ADDRSTRLEN
+#define INET_ADDRSTRLEN 16
+#endif
+
+#define CRLF "\r\n"
+
 struct dll_range {
 	ULONG_PTR start;
 	ULONG_PTR end;
 };
-#define MAX_DLLS 100
+#define MAX_DLLS 500
 
 DWORD get_pid_by_tid(DWORD tid);
 
@@ -202,6 +208,7 @@ void set_dll_of_interest(ULONG_PTR BaseAddress);
 PCHAR get_exe_basename(PCHAR ModulePath);
 PWCHAR get_dll_basename(PWCHAR ModulePath);
 void register_dll_notification_manually(PLDR_DLL_NOTIFICATION_FUNCTION notify);
+void disassemble(PVOID address, char* buffer, size_t bufferSize);
 
 extern char *our_process_path;
 extern wchar_t *our_process_path_w;
@@ -226,6 +233,7 @@ ULONG_PTR get_jseval_addr(HMODULE mod);
 ULONG_PTR get_cdocument_write_addr(HMODULE mod);
 ULONG_PTR get_olescript_compile_addr(HMODULE mod);
 ULONG_PTR get_olescript_parsescripttext_addr(HMODULE mod);
+ULONG_PTR get_vbscript_addr(HMODULE mod, const char * function);
 
 BOOL is_bytes_in_buf(PCHAR buf, ULONG len, PCHAR memstr, ULONG memlen, ULONG maxsearchbytes);
 void replace_string_in_buf(PCHAR buf, ULONG len, PCHAR findstr, PCHAR repstr);
@@ -256,3 +264,5 @@ struct envstruct {
 	ULONG nullval;
 	LPWSTR envstr;
 };
+
+const char* GetLanguageName(LANGID langID);

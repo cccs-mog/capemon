@@ -55,9 +55,8 @@ extern int DumpMemory(PVOID Buffer, SIZE_T Size);
 extern int ScanForPE(PVOID Buffer, SIZE_T Size, PVOID* Offset);
 extern int ScanPageForNonZero(PVOID Address);
 
-PTRACKEDREGION CurrentRegion;
+static DWORD CurrentThread;
 static DWORD_PTR LastEIP, CurrentEIP;
-
 //**************************************************************************************
 PIMAGE_NT_HEADERS GetNtHeaders(PVOID BaseAddress)
 //**************************************************************************************
@@ -151,7 +150,7 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 	if (TrackedRegion->AllocationBase != BaseAddress)
 		TrackedRegion->Address = BaseAddress;
 
-	if (CurrentRegion && CurrentRegion != TrackedRegion)
+	if (CurrentRegion && CurrentRegion != TrackedRegion && CurrentThread && CurrentThread == GetCurrentThreadId())
 	{
 		if (TraceRunning)
 			DebuggerOutput("AllocationHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
@@ -161,6 +160,7 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 	}
 
 	CurrentRegion = TrackedRegion;
+	CurrentThread = GetCurrentThreadId();
 
 	if (AllocationType & MEM_COMMIT)
 	{
@@ -237,7 +237,7 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 	if (TrackedRegion->AllocationBase != Address)
 		TrackedRegion->Address = Address;
 
-	if (CurrentRegion && CurrentRegion != TrackedRegion)
+	if (CurrentRegion && CurrentRegion != TrackedRegion && CurrentThread && CurrentThread == GetCurrentThreadId())
 	{
 		if (TraceRunning)
 			DebuggerOutput("ProtectionHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
@@ -247,6 +247,7 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 	}
 
 	CurrentRegion = TrackedRegion;
+	CurrentThread = GetCurrentThreadId();
 
 	if (!VirtualQuery(Address, &TrackedRegion->MemInfo, sizeof(MEMORY_BASIC_INFORMATION)))
 	{
@@ -276,28 +277,7 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 		return;
 	}
 
-	if (!TrackedRegion->PagesDumped && (NewRegion || *OldProtect & WRITABLE_FLAGS) && ScanForNonZero(Address, GetAccessibleSize(Address)))
-	{
-		DebugOutput("ProtectionHandler: New code region detected at 0x%p.\n", TrackedRegion->AllocationBase);
-
-		ProcessTrackedRegion(TrackedRegion);
-
-		if (TrackedRegion->PagesDumped)
-		{
-			DebugOutput("ProtectionHandler: Dumped region at 0x%p.\n", TrackedRegion->AllocationBase);
-			ClearTrackedRegion(TrackedRegion);
-			hook_enable();
-			return;
-		}
-#ifdef DEBUG_COMMENTS
-		else
-			DebugOutput("ProtectionHandler: No PE images found in region at 0x%p.\n", TrackedRegion->AllocationBase);
-#endif
-	}
-#ifdef DEBUG_COMMENTS
-	else
-		DebugOutput("ProtectionHandler: No action taken on empty protected region at 0x%p.\n", Address);
-#endif
+	ProcessTrackedRegion(TrackedRegion);
 
 	if (g_config.unpacker > 1 && !TrackedRegion->PagesDumped)
 	{

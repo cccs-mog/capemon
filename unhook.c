@@ -24,7 +24,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "misc.h"
 #include "config.h"
 #include <Sddl.h>
+#include "CAPE\CAPE.h"
+#include "CAPE\Debugger.h"
 #include "CAPE\YaraHarness.h"
+#include "CAPE\Unpacker.h"
 
 #define UNHOOK_MAXCOUNT 2048
 #define UNHOOK_BUFSIZE 32
@@ -33,7 +36,6 @@ extern void DebugOutput(_In_ LPCTSTR lpOutputString, ...);
 extern void file_handle_terminate();
 extern int DoProcessDump();
 extern BOOL ProcessDumped;
-extern void ClearAllBreakpoints();
 extern void DebuggerShutdown(), DumpStrings();
 extern HANDLE DebuggerLog, TlsLog;
 
@@ -125,6 +127,22 @@ void invalidate_regions_for_hook(const hook_t *hook)
 			g_hook_reported[idx] = 1;
 			/* since this hook was removed, we shouldn't prevent the same address from being hooked again
 			   later, see address_already_hooked() above */
+			g_addr[idx] = 0;
+		}
+	}
+}
+
+void remove_hook(const char *funcname)
+{
+	for (uint32_t idx = 0; idx < g_index; idx++) {
+		DWORD old_protect;
+		if (g_addr[idx] && !stricmp(g_unhook_hooks[idx]->funcname, funcname)) {
+			if (!VirtualProtect(g_addr[idx], g_length[idx], PAGE_EXECUTE_READWRITE, &old_protect))
+				return;
+			memcpy(g_addr[idx], g_orig[idx], g_length[idx]);
+			VirtualProtect(g_addr[idx], g_length[idx], old_protect, &old_protect);
+			/* get the unhook watcher to ignore this region */
+			g_hook_reported[idx] = 1;
 			g_addr[idx] = 0;
 		}
 	}
@@ -279,6 +297,14 @@ static DWORD WINAPI _terminate_event_thread(LPVOID param)
 	else
 		DebugOutput("Terminate Event: Skipping dump of process %d\n", ProcessId);
 
+	if (CurrentRegion) {
+		DebugOutput("Terminate Event: Current region 0x%p\n", CurrentRegion);
+		ProcessTrackedRegion(CurrentRegion);
+		CurrentRegion = NULL;
+	}
+	else
+		DebugOutput("Terminate Event: Current region empty\n");
+
 	file_handle_terminate();
 
 	if (g_config.yarascan)
@@ -291,7 +317,7 @@ static DWORD WINAPI _terminate_event_thread(LPVOID param)
 	if (g_terminate_event_handle) {
 		SetEvent(g_terminate_event_handle);
 		CloseHandle(g_terminate_event_handle);
-		DebugOutput("Terminate Event: CAPE shutdown complete for process %d\n", ProcessId);
+		DebugOutput("Terminate Event: monitor shutdown complete for process %d\n", ProcessId);
 	}
 	else
 		DebugOutput("Terminate Event: Shutdown complete for process %d but failed to inform analyzer.\n", ProcessId);

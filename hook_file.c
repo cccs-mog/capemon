@@ -728,8 +728,10 @@ HOOKDEF(NTSTATUS, WINAPI, NtQueryAttributesFile,
 	__out  PFILE_BASIC_INFORMATION FileInformation
 ) {
 	NTSTATUS ret = Old_NtQueryAttributesFile(ObjectAttributes, FileInformation);
-
-	LOQ_ntstatus("filesystem", "O", "FileName", ObjectAttributes);
+	if (ObjectAttributes)
+		LOQ_ntstatus("filesystem", "O", "FileName", ObjectAttributes);
+	else
+		LOQ_ntstatus("filesystem", "");
 	return ret;
 }
 
@@ -1494,6 +1496,34 @@ HOOKDEF(BOOL, WINAPI, GetVolumeInformationByHandleW,
 	return ret;
 }
 
+HOOKDEF(BOOL, WINAPI, SetFileInformationByHandle,
+	_In_		HANDLE                    hFile,
+	_In_		FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+	_In_		LPVOID                    lpFileInformation,
+	_In_		DWORD                     dwBufferSize
+) {
+	if (FileInformationClass == FileDispositionInfo && dropped_count < g_config.dropped_limit) {
+		wchar_t *fname = calloc(32768, sizeof(wchar_t));
+		wchar_t *path = calloc(32768, sizeof(wchar_t));
+
+		path_from_handle(hFile, fname, 32768);
+		ensure_absolute_unicode_path(path, fname);
+#ifdef DEBUG_COMMENTS
+		DebugOutput("SetFileInformationByHandle: FILE_DEL %ws\n", path);
+#endif
+		unsigned int len = lstrlenW(path);
+		pipe("FILE_DEL:%S", len, path);
+		dropped_count++;
+
+		free(fname);
+		free(path);
+	}
+
+	BOOL ret = Old_SetFileInformationByHandle(hFile, FileInformationClass, lpFileInformation, dwBufferSize);
+
+	return ret;
+}
+
 HOOKDEF(HRESULT, WINAPI, SHGetFolderPathW,
 	_In_ HWND hwndOwner,
 	_In_ int nFolder,
@@ -1592,6 +1622,21 @@ HOOKDEF(HANDLE, WINAPI, FindFirstChangeNotificationW,
 	HANDLE ret = Old_FindFirstChangeNotificationW(lpPathName, bWatchSubtree, dwNotifyFilter);
 
 	LOQ_handle("filesystem", "Fhi", "PathName", lpPathName, "NotifyFilter", dwNotifyFilter, "WatchSubtree", bWatchSubtree);
+
+	return ret;
+}
+
+HOOKDEF(DWORD, WINAPI, RmStartSession,
+	__out DWORD *pSessionHandle,
+	_Reserved_ DWORD dwSessionFlags,
+	__out WCHAR strSessionKey[]
+) {
+	DWORD ret = Old_RmStartSession(pSessionHandle, dwSessionFlags, strSessionKey);
+
+	if (NT_SUCCESS(ret))
+		LOQ_ntstatus("filesystem", "u", "SessionKey", strSessionKey);
+	else
+		LOQ_ntstatus("filesystem", "");
 
 	return ret;
 }
