@@ -1,5 +1,4 @@
 logtbl.c
-Debug/
 capemon.opensdf
 capemon.sdf
 capemon.v11.suo
@@ -9,7 +8,6 @@ bson/bson.v11.suo
 bson/bson.v12.suo
 bson/bson.vcxproj.user
 logtbl.pyc
-capemon.vcxproj.user
 bson/Release
 objects
 Release
