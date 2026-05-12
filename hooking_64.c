@@ -587,7 +587,7 @@ static void hook_create_pre_tramp_notail(hook_t *h)
 	unsigned char pre_tramp2[] = {
 		// test eax, eax
 		0x85, 0xc0,
-		// jnz 0x21
+		// jnz 0x21 -> pre_tramp3_nostack
 		0x75, 0x21,
 		// add rsp, 0x20
 		0x48, 0x83, 0xc4, 0x20,
@@ -666,7 +666,7 @@ static void hook_create_pre_tramp_notail(hook_t *h)
 	unsigned char pre_tramp4_nostack[] = {
 		// test eax, eax
 		0x85, 0xc0,
-		// jnz 0x21
+		// jnz 0x21 -> pre_tramp4_stack
 		0x75, 0x21,
 		// add rsp, 0x20 (from pre_tramp12)
 		0x48, 0x83, 0xc4, 0x20,
@@ -686,7 +686,7 @@ static void hook_create_pre_tramp_notail(hook_t *h)
 	unsigned char pre_tramp4_stack[] = {
 		// test eax, eax
 		0x85, 0xc0,
-		// jnz 0x3c
+		// jnz 0x3c -> pre_tramp5_nostack
 		0x75, 0x3c,
 		// mov eax, numargs
 		0xb8, h->numargs, 0x00, 0x00, 0x00,
@@ -1038,9 +1038,9 @@ int hook_api(hook_t *h, int type)
 			if (exportaddr)
 				addr = (unsigned char *)GetProcAddress(hmod, h->funcname);
 			if (exportaddr && addr && (PVOID)addr != exportaddr) {
-				unsigned int offset;
-				char *module_name = convert_address_to_dll_name_and_offset((ULONG_PTR)addr, &offset);
-				DebugOutput("hook_api: Warning - %s export address 0x%p differs from GetProcAddress -> 0x%p (%s::0x%x)\n", h->funcname, exportaddr, addr, module_name, offset);
+				unsigned int offset = (unsigned int)((ULONG_PTR)addr - (ULONG_PTR)hmod);
+				UNICODE_STRING *module_name = get_module_name((ULONG_PTR)addr);
+				DebugOutput("hook_api: Warning - %s export address 0x%p differs from GetProcAddress -> 0x%p (%wZ::0x%x)\n", h->funcname, exportaddr, addr, module_name, offset);
 			}
 			else if (exportaddr && !addr) {
 				addr = exportaddr;
@@ -1224,6 +1224,8 @@ static int our_stackwalk(ULONG_PTR _rip, ULONG_PTR sp, PVOID *backtrace, unsigne
 			runfunc = RtlLookupFunctionEntry(ctx.Rip, &imgbase, NULL);	// needs LdrpInvertedFunctionTableSRWLock on Win10
 			memset(&nvctx, 0, sizeof(nvctx));
 			if (runfunc == NULL) {
+				if (our_isbadreadptr((PVOID)ctx.Rsp, sizeof(PVOID)))
+					break;
 				ctx.Rip = (ULONG_PTR)(*(ULONG_PTR *)ctx.Rsp);
 				ctx.Rsp += 8;
 			}

@@ -118,6 +118,8 @@ extern _RtlCompareMemory pRtlCompareMemory;
 extern BOOLEAN is_image_base_remapped(HMODULE BaseAddress);
 extern uint32_t path_from_handle(HANDLE handle, wchar_t *path, uint32_t path_buffer_len);
 extern wchar_t *ensure_absolute_unicode_path(wchar_t *out, const wchar_t *in);
+extern void hook_enable();
+extern void hook_disable();
 extern int called_by_hook(void);
 extern DWORD parent_process_id();
 extern int operate_on_backtrace(ULONG_PTR _esp, ULONG_PTR _ebp, void *extra, int(*func)(void *, ULONG_PTR));
@@ -734,7 +736,10 @@ PVOID GetFunctionByName(HMODULE ModuleBase, PCHAR FunctionName)
 	PVOID Address = NULL;
 	for (SIZE_T j = 0; j < FoundCount; j++)
 		if (results[j].FunctionName && results[j].Address && !strcmp(results[j].FunctionName, FunctionName))
+		{
 			Address = results[j].Address;
+			break;
+		}
 
 	free(results);
 
@@ -973,7 +978,7 @@ PTRACKEDREGION GetTrackedRegion(PVOID Address)
 
 	while (CurrentTrackedRegion)
 	{
-		if (GetAllocationBase(Address) == CurrentTrackedRegion->AllocationBase)
+		if (CurrentTrackedRegion->AllocationBase && GetAllocationBase(Address) == CurrentTrackedRegion->AllocationBase)
 			return CurrentTrackedRegion;
 
 		CurrentTrackedRegion = CurrentTrackedRegion->NextTrackedRegion;
@@ -1079,9 +1084,6 @@ PTRACKEDREGION AddTrackedRegion(PVOID Address, ULONG Protect)
 		TrackedRegion->MemInfo.Protect = Protect;
 
 	TrackedRegion->Entropy = GetEntropy((PUCHAR)TrackedRegion->AllocationBase);
-
-	if (!TrackedRegion->Entropy)
-		DebugOutput("AddTrackedRegion: GetEntropy failed.");
 
 	// If the region is a PE image
 	TrackedRegion->EntryPoint = GetEntryPoint(TrackedRegion->AllocationBase);
@@ -1306,18 +1308,34 @@ void ProcessTrackedRegion(PTRACKEDREGION TrackedRegion)
 	DebugOutput("ProcessTrackedRegion: Address 0x%p Base 0x%p Size %d sub-allocation %d dump count %d\n", TrackedRegion->Caller, Address, Size, TrackedRegion->SubAllocation, DumpCount);
 #endif
 
-	if (TrackedRegion->PagesDumped)
+	// Allow a big enough change in entropy to trigger another dump
+	double Entropy = GetEntropy(Address);
+	double Delta = 0;
+	if (Entropy)
 	{
-		// Allow a big enough change in entropy to trigger another dump
-		if (TrackedRegion->Entropy)
-		{
-			double Entropy = GetEntropy(Address);
-			if (Entropy && (fabs(TrackedRegion->Entropy - Entropy) < (double)ENTROPY_DELTA))
-				return;
-		}
-		else
+		if (TrackedRegion->PagesDumped && Entropy == TrackedRegion->Entropy)
 			return;
+
+		Delta = fabs(TrackedRegion->Entropy - Entropy);
+		if (TrackedRegion->PagesDumped && (Delta < (double)ENTROPY_DELTA))
+			return;
+
+		if (Entropy != TrackedRegion->Entropy)
+		{
+			if (TrackedRegion->Entropy)
+				DebugOutput("ProcessTrackedRegion: Updated entropy for tracked region at 0x%p: %e (from %e)", Address, Entropy, TrackedRegion->Entropy);
+			else
+				DebugOutput("ProcessTrackedRegion: Entropy for tracked region at 0x%p: %e", Address, Entropy);
+		}
+#ifdef DEBUG_COMMENTS
+		else
+			DebugOutput("ProcessTrackedRegion: No change in entropy for tracked region at 0x%p: %e", Address, Entropy);
 	}
+	else
+		DebugOutput("ProcessTrackedRegion: Unable to obtain entropy for tracked region at 0x%p", Address);
+#else
+	}
+#endif
 
 	// Suppress exceptions from scans/dumps in debugger log
 	BOOL TraceIsRunning = TraceRunning;
@@ -1333,7 +1351,7 @@ void ProcessTrackedRegion(PTRACKEDREGION TrackedRegion)
 			DebugOutput("ProcessTrackedRegion: Region at 0x%p mapped as %ws is in known range, skipping", Address, ModulePath);
 			return;
 		}
-		else if (VerifyHeaders((PVOID)Address, TranslatePathFromDeviceToLetterW(ModulePath)) == 1)
+		else if (Entropy && Delta < (double)ENTROPY_DELTA && VerifyHeaders((PVOID)Address, TranslatePathFromDeviceToLetterW(ModulePath)) == 1)
 		{
 			if (!path_is_system(ModulePath))
 				DebugOutput("ProcessTrackedRegion: Region at 0x%p mapped as %ws appears unmodified, skipping", Address, ModulePath);
@@ -1342,6 +1360,9 @@ void ProcessTrackedRegion(PTRACKEDREGION TrackedRegion)
 		else
 			DebugOutput("ProcessTrackedRegion: Interesting region at 0x%p mapped as %ws, dumping", Address, ModulePath);
 	}
+
+	if (Entropy)
+		TrackedRegion->Entropy = Entropy;
 
 	if (!CapeMetaData->DumpType)
 		CapeMetaData->DumpType = UNPACKED_SHELLCODE;
@@ -1354,7 +1375,7 @@ void ProcessTrackedRegion(PTRACKEDREGION TrackedRegion)
 	if (TrackedRegion->PagesDumped)
 	{
 		if (TraceIsRunning)
-			DebuggerOutput("ProcessTrackedRegion: Dumped region at 0x%p.\n", Address);
+			DebuggerOutput("ProcessTrackedRegion: Dumped region at 0x%p ", Address);
 		else
 			DebugOutput("ProcessTrackedRegion: Dumped region at 0x%p.\n", Address);
 		ClearTrackedRegion(TrackedRegion);
@@ -1362,7 +1383,7 @@ void ProcessTrackedRegion(PTRACKEDREGION TrackedRegion)
 	else
 	{
 		if (TraceIsRunning)
-			DebuggerOutput("ProcessTrackedRegion: Failed to dump region at 0x%p.\n", Address);
+			DebuggerOutput("ProcessTrackedRegion: Failed to dump region at 0x%p ", Address);
 		else
 			DebugOutput("ProcessTrackedRegion: Failed to dump region at 0x%p.\n", Address);
 	}
@@ -1457,6 +1478,53 @@ BOOL SetCapeMetaData(DWORD DumpType, DWORD TargetPid, HANDLE hTargetProcess, PVO
 	}
 
 	return TRUE;
+}
+
+unsigned int FileOffsetFromRVA(PVOID ImageBase, DWORD RVA)
+{
+	if (!ImageBase)
+	{
+		DebugOutput("FileOffsetFromRVA: Error - no address supplied.\n");
+		return 0;
+	}
+
+	if (IsDisguisedPEHeader(ImageBase) <= 0)
+		return 0;
+
+	PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)ImageBase;
+	PIMAGE_NT_HEADERS pNtHeader = NULL;
+
+	__try
+	{
+		if (pDosHeader->e_lfanew && (ULONG)pDosHeader->e_lfanew < PE_HEADER_LIMIT && ((ULONG)pDosHeader->e_lfanew & 3) == 0)
+			pNtHeader = (PIMAGE_NT_HEADERS)((PUCHAR)pDosHeader + (ULONG)pDosHeader->e_lfanew);
+	}
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
+		DebugOutput("FileOffsetFromRVA: Exception occurred attempting to follow e_lfanew 0x%x\n", pDosHeader->e_lfanew);
+		return 0;
+	}
+
+	if (!pNtHeader || !TestPERequirements(pNtHeader))
+		return 0;
+
+	PIMAGE_SECTION_HEADER pSectionTable = IMAGE_FIRST_SECTION(pNtHeader);
+	SIZE_T AllocationSize = GetAllocationSize(ImageBase);
+
+	if (RVA < pSectionTable[0].VirtualAddress)
+		return (unsigned int)RVA;
+
+	for (int i = 0; i < pNtHeader->FileHeader.NumberOfSections; i++)
+	{
+		if (RVA >= pSectionTable[i].VirtualAddress && RVA < (pSectionTable[i].VirtualAddress + max(pSectionTable[i].SizeOfRawData, pSectionTable[i].Misc.VirtualSize)))
+		{
+			unsigned int FileOffset = RVA - pSectionTable[i].VirtualAddress + pSectionTable[i].PointerToRawData;
+			if (FileOffset < AllocationSize)
+				return FileOffset;
+		}
+	}
+
+	return 0;
 }
 
 //**************************************************************************************
@@ -1585,7 +1653,11 @@ char* GetName()
 		return 0;
 	}
 
+	hook_disable();
+
 	GetSystemTime(&Time);
+
+	hook_enable();
 
 	random = rand();
 	if (!random)
@@ -1718,87 +1790,6 @@ double GetEntropy(PUCHAR Buffer)
 	}
 
 	return Entropy;
-}
-
-//**************************************************************************************
-int DumpXorPE(LPBYTE Buffer, unsigned int Size)
-//**************************************************************************************
-{
-	LONG e_lfanew;
-	DWORD NT_Signature;
-	unsigned int i, j, k;
-	BYTE* DecryptedBuffer = NULL;
-
-	for (i=0; i<=0xFF; i++)
-	{
-		// check for the DOS signature a.k.a MZ header
-		if ((*Buffer^(BYTE)i) == 'M' && (*(Buffer+1)^(BYTE)i) == 'Z')
-		{
-			DebugOutput("MZ header found with bytewise XOR key 0x%.2x\n", i);
-
-			e_lfanew = (LONG)*(DWORD*)(Buffer+0x3c);
-
-			DebugOutput("Encrypted e_lfanew: 0x%x", e_lfanew);
-
-			for (j=0; j<sizeof(LONG); j++)
-				*((BYTE*)&e_lfanew+j) = *((BYTE*)&e_lfanew+j)^i;
-
-			DebugOutput("Decrypted e_lfanew: 0x%x", e_lfanew);
-
-			if ((unsigned int)e_lfanew > PE_HEADER_LIMIT)
-			{
-				DebugOutput("The pointer to the PE header seems a tad large: 0x%x", e_lfanew);
-				//return FALSE;
-			}
-
-			// let's get the NT signature a.k.a PE header
-			memcpy(&NT_Signature, Buffer+e_lfanew, 4);
-
-			DebugOutput("Encrypted NT_Signature: 0x%x", NT_Signature);
-
-			// let's try decrypting it with the key
-			for (k=0; k<4; k++)
-				*((BYTE*)&NT_Signature+k) = *((BYTE*)&NT_Signature+k)^i;
-
-			DebugOutput("Encrypted NT_Signature: 0x%x", NT_Signature);
-
-			// does it check out?
-			if (NT_Signature == IMAGE_NT_SIGNATURE)
-			{
-				DebugOutput("Xor-encrypted PE detected, about to dump.\n");
-
-				DecryptedBuffer = (BYTE*)calloc(Size, sizeof(BYTE));
-
-				if (DecryptedBuffer == NULL)
-				{
-					ErrorOutput("Error allocating memory for decrypted PE binary");
-					return FALSE;
-				}
-
-				memcpy(DecryptedBuffer, Buffer, Size);
-
-				for (k=0; k<Size; k++)
-					*(DecryptedBuffer+k) = *(DecryptedBuffer+k)^i;
-
-				CapeMetaData->Address = DecryptedBuffer;
-				DumpImageInCurrentProcess(DecryptedBuffer);
-
-				free(DecryptedBuffer);
-				return i;
-			}
-			else
-			{
-				DebugOutput("PE signature invalid, looks like a false positive.\n");
-				return FALSE;
-			}
-		}
-	}
-
-	// We free can free DecryptedBuffer as it's no longer needed
-	if(DecryptedBuffer)
-		free(DecryptedBuffer);
-
-	return FALSE;
 }
 
 void DumpStrings()
@@ -2127,6 +2118,46 @@ PCHAR ScanForExport(PVOID Address, SIZE_T ScanMax)
 					return Name;
 			}
 		}
+	}
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
+		return NULL;
+	}
+
+	return NULL;
+}
+
+//**************************************************************************************
+PCHAR GetExportDirectory(PVOID Address)
+//**************************************************************************************
+{
+	if (!Address)
+		return NULL;
+
+	__try
+	{
+		PVOID Base = GetAllocationBase(Address);
+		if (!Base || !IsAddressAccessible(Base))
+			return NULL;
+
+		PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)Base;
+		if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+			return NULL;
+
+		PIMAGE_NT_HEADERS NtHeader = (PIMAGE_NT_HEADERS)((PUCHAR)Base + DosHeader->e_lfanew);
+		if (NtHeader->Signature != IMAGE_NT_SIGNATURE)
+			return NULL;
+
+		IMAGE_DATA_DIRECTORY ExportDirEntry = NtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+		if (ExportDirEntry.VirtualAddress == 0 || ExportDirEntry.Size == 0)
+			return NULL;
+
+		PIMAGE_EXPORT_DIRECTORY ExportDir = (PIMAGE_EXPORT_DIRECTORY)((PUCHAR)Base + ExportDirEntry.VirtualAddress);
+		if (!IsAddressAccessible(ExportDir))
+			return NULL;
+
+		if (ExportDir && ExportDir->Name)
+			return ((PCHAR)Base + ExportDir->Name);
 	}
 	__except(EXCEPTION_EXECUTE_HANDLER)
 	{
@@ -2611,7 +2642,7 @@ int VerifyHeaders(PVOID ImageBase, LPCWSTR Path)
 		RetVal = 0;
 	}
 
-	SetFilePointer(hFile, NtHeaders.OptionalHeader.AddressOfEntryPoint, 0, FILE_BEGIN);
+	SetFilePointer(hFile, FileOffsetFromRVA(ImageBase, NtHeaders.OptionalHeader.AddressOfEntryPoint), 0, FILE_BEGIN);
 
 	unsigned int ChunkSize = 0x10;
 	EntryPointBytes = calloc(ChunkSize, sizeof(BYTE));
@@ -3116,7 +3147,6 @@ BOOL DumpRegion(PVOID Address)
 				DebugOutput("DumpRegion: Dumped stack region from 0x%p, size %d bytes.\n", BaseAddress, RegionSize);
 			else
 				DebugOutput("DumpRegion: Dumped region at 0x%p, size %d bytes.\n", BaseAddress, RegionSize);
-			DumpCount++;
 			return TRUE;
 		}
 		else
@@ -3312,9 +3342,6 @@ int DumpImageInCurrentProcess(PVOID Address)
 end:
 	if (RegionCopy)
 		free(RegionCopy);
-
-	if (RetVal)
-		DumpCount++;
 
 	return RetVal;
 }

@@ -34,7 +34,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 extern char *our_process_name;
 
 static _NtQueryInformationProcess pNtQueryInformationProcess;
-static _NtQueryInformationThread pNtQueryInformationThread;
 static _RtlGenRandom pRtlGenRandom;
 static _NtQueryAttributesFile pNtQueryAttributesFile;
 static _NtQueryObject pNtQueryObject;
@@ -43,6 +42,7 @@ static _NtDelayExecution pNtDelayExecution;
 static _NtQuerySystemInformation pNtQuerySystemInformation;
 static _RtlEqualUnicodeString pRtlEqualUnicodeString;
 static _RtlInitUnicodeString pRtlInitUnicodeString;
+_NtQueryInformationThread pNtQueryInformationThread;
 _NtMapViewOfSection pNtMapViewOfSection;
 _NtUnmapViewOfSection pNtUnmapViewOfSection;
 _NtAllocateVirtualMemory pNtAllocateVirtualMemory;
@@ -918,18 +918,18 @@ BOOL is_in_dll_range(ULONG_PTR addr)
 	return FALSE;
 }
 
-BOOL test_is_in_dll_range(ULONG_PTR addr)
+BOOL remove_dll_range(ULONG_PTR addr)
 {
-	DWORD i;
-	DebugOutput("is_in_dll_range: addr 0x%p", addr);
-	for (i = 0; i < loaded_dlls; i++) {
-		DebugOutput("is_in_dll_range: module %d start 0x%p end 0x%p", i, dll_ranges[i].start, dll_ranges[i].end);
-		if (addr >= dll_ranges[i].start && addr < dll_ranges[i].end) {
-			DebugOutput("is_in_dll_range: found!");
-			return TRUE;
-		}
-	}
-	DebugOutput("is_in_dll_range: NOT found :-(");
+    DWORD i;
+    for (i = 0; i < loaded_dlls; i++) {
+        if (addr < dll_ranges[i].start || addr >= dll_ranges[i].end)
+            continue;
+		dll_ranges[i] = dll_ranges[loaded_dlls - 1];
+		dll_ranges[loaded_dlls - 1].start = 0;
+		dll_ranges[loaded_dlls - 1].end = 0;
+		loaded_dlls--;
+		return TRUE;
+    }
 	return FALSE;
 }
 
@@ -1031,6 +1031,26 @@ char *convert_address_to_dll_name_and_offset(ULONG_PTR addr, unsigned int *offse
 	return NULL;
 }
 
+UNICODE_STRING* get_module_name(ULONG_PTR addr)
+{
+	PLDR_DATA_TABLE_ENTRY mod;
+	PLIST_ENTRY pHeadEntry;
+	PLIST_ENTRY pListEntry;
+	PEB *peb = (PEB *)get_peb();
+
+	pHeadEntry = &peb->LoaderData->InLoadOrderModuleList;
+	for(pListEntry = pHeadEntry->Flink;
+		pListEntry != pHeadEntry;
+		pListEntry = pListEntry->Flink)
+	{
+		mod = CONTAINING_RECORD(pListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderModuleList);
+		if (addr < (ULONG_PTR)mod->BaseAddress || addr >= ((ULONG_PTR)mod->BaseAddress + mod->SizeOfImage))
+			continue;
+		return &mod->BaseDllName;
+	}
+	return NULL;
+}
+
 // hide our module from PEB
 // http://www.openrce.org/blog/view/844/How_to_hide_dll
 
@@ -1125,19 +1145,23 @@ uint32_t path_from_handle(HANDLE handle,
 	return length;
 }
 
-uint32_t path_from_object_attributes(const OBJECT_ATTRIBUTES *obj,
-	wchar_t *path, uint32_t buffer_length)
+uint32_t path_from_object_attributes(const OBJECT_ATTRIBUTES *obj, wchar_t *path, uint32_t buffer_length)
 {
 	uint32_t copylen, obj_length, length;
 
-	if (obj->ObjectName == NULL || obj->ObjectName->Buffer == NULL) {
-		return path_from_handle(obj->RootDirectory, path, buffer_length);;
-	}
+	if (obj == NULL)
+		return 0;
+
+	if (obj->ObjectName == NULL || obj->ObjectName->Buffer == NULL)
+		return path_from_handle(obj->RootDirectory, path, buffer_length);
 
 	// ObjectName->Length is actually the size in bytes.
 	obj_length = obj->ObjectName->Length / sizeof(wchar_t);
 
 	copylen = min(obj_length, buffer_length - 1);
+
+	if (our_isbadreadptr(obj->ObjectName->Buffer, copylen * sizeof(wchar_t)))
+		return 0;
 
 	if (obj->RootDirectory == NULL) {
 		memcpy(path, obj->ObjectName->Buffer, copylen * sizeof(wchar_t));
@@ -1918,6 +1942,29 @@ static BOOL get_section_bounds(HMODULE mod, const char * sectionname, PUCHAR *st
 	return FALSE;
 }
 
+static BOOL get_section_file_bounds(HMODULE mod, const char * sectionname, PUCHAR *start, PUCHAR *end)
+{
+	PUCHAR buf = (PUCHAR)mod;
+	PIMAGE_DOS_HEADER doshdr;
+	PIMAGE_NT_HEADERS nthdr;
+	PIMAGE_SECTION_HEADER sechdr;
+	unsigned int numsecs, i;
+
+	doshdr = (PIMAGE_DOS_HEADER)buf;
+	nthdr = (PIMAGE_NT_HEADERS)(buf + doshdr->e_lfanew);
+	sechdr = (PIMAGE_SECTION_HEADER)((PUCHAR)&nthdr->OptionalHeader + nthdr->FileHeader.SizeOfOptionalHeader);
+	numsecs = nthdr->FileHeader.NumberOfSections;
+
+	for (i = 0; i < numsecs; i++) {
+		if (memcmp(sechdr[i].Name, sectionname, strlen(sectionname)))
+			continue;
+		*start = buf + sechdr[i].PointerToRawData;
+		*end = *start + sechdr[i].SizeOfRawData;
+		return TRUE;
+	}
+	return FALSE;
+}
+
 ULONG_PTR get_connectex_addr(HMODULE mod)
 {
 	PUCHAR start, end;
@@ -2305,40 +2352,6 @@ BOOLEAN is_image_base_remapped(HMODULE BaseAddress)
 	return remapped;
 }
 
-ULONG_PTR win32u_base;
-DWORD win32u_size;
-
-BOOLEAN is_address_in_win32u(ULONG_PTR address)
-{
-	if (!win32u_base)
-		return FALSE;
-
-	if (!win32u_size)
-		win32u_size = get_image_size(win32u_base);
-
-	if (address >= win32u_base && address < (win32u_base + win32u_size))
-		return TRUE;
-
-	return FALSE;
-}
-
-ULONG_PTR user32_base;
-DWORD user32_size;
-
-BOOLEAN is_address_in_user32(ULONG_PTR address)
-{
-	if (!user32_base)
-		return FALSE;
-
-	if (!user32_size)
-		user32_size = get_image_size(user32_base);
-
-	if (address >= user32_base && address < (user32_base + user32_size))
-		return TRUE;
-
-	return FALSE;
-}
-
 BOOLEAN prevent_module_unloading(PVOID BaseAddress) {
 	// Some code may attempt to unmap a previously mapped view of, say, ntdll
 	// e.g. Xenos dll injector (https://github.com/DarthTon/Xenos - def1c2f12307d598e42506a55f1a06ed5e652af0d260aac9572469429f10d04d)
@@ -2395,6 +2408,35 @@ void prevent_module_reloading(PVOID *BaseAddress) {
 	}
 
 	free(absolutepath);
+}
+
+void prevent_module_unhooking(PVOID buffer, wchar_t *filename)
+{
+	PUCHAR file_start = NULL, file_end = NULL, mem_start = NULL, mem_end = NULL;
+
+	wchar_t *whitelist[] = {
+#ifdef _WIN64
+		L"\\Device\\HarddiskVolume2\\Windows\\System32\\ntdll.dll",
+#else
+		L"\\Device\\HarddiskVolume2\\Windows\\SysWOW64\\ntdll.dll",
+#endif
+		NULL
+	};
+
+	for (int i = 0; whitelist[i]; i++) {
+		if (!wcsicmp(whitelist[i], filename)) {
+			get_section_file_bounds(buffer, ".text", &file_start, &file_end);
+			break;
+		}
+	}
+
+	if (!file_start)
+		return;
+
+	if (!get_section_bounds((HMODULE)ntdll_base, ".text", &mem_start, &mem_end))
+		return;
+
+	memcpy(file_start, mem_start, (unsigned int)(file_end - file_start));
 }
 
 static size_t append_octet(char** p, size_t* remaining, unsigned char octet) {
@@ -2498,4 +2540,12 @@ DWORD wait_for_event_to_be_signaled(HANDLE hEvent, DWORD dwTimeout) {
 
 		raw_sleep(250);
 	}
+}
+
+void* gettib() {
+#ifdef _WIN64
+    return (void *)__readgsqword(0);
+#else
+    return (void *)__readfsdword(0);
+#endif
 }

@@ -35,6 +35,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define SPOOFED_CPU_CORE_NUM 4
 
+// Defines to string representation of above vars so we don't need to do useless converts
+#define WIDE_SPOOFED_RAM L"4294967296"
+#define WIDE_SPOOFED_RAM_IN_KB L"4194304"
+#define WIDE_DISK_LOGICAL_SIZE L"1098988720128" // SPOOFED_DISK_SIZE - RECOVERY_PARTITION_SIZE
+
 
 struct _g_config {
 	// name of the pipe to communicate with cuckoo
@@ -144,6 +149,12 @@ struct _g_config {
 	// ntdll write protection
 	unsigned int ntdll_protect;
 
+	// ntdll unhook protection (NtReadFile-based)
+	unsigned int ntdll_unhook;
+
+	// hook write protection
+	unsigned int hook_protect;
+
 	// ntdll remap protection
 	unsigned int ntdll_remap;
 
@@ -156,6 +167,7 @@ struct _g_config {
 	BOOLEAN suspend_logging;
 
 	char *excluded_apinames[EXCLUSION_MAX];
+	char *included_apinames[EXCLUSION_MAX];
 	wchar_t *excluded_dllnames[EXCLUSION_MAX];
 	char *base_on_apiname[EXCLUSION_MAX];
  	char *dump_on_apinames[EXCLUSION_MAX];
@@ -205,14 +217,14 @@ struct _g_config {
 	// for dumping of crypto API ImportKey buffers
 	int dump_keys;
 
-	// for PlugX config & payload extraction
-	int plugx;
-
 	// syscall hooks
 	int syscall;
 
 	// Enable debugger
 	int debugger;
+
+	// Enable interactive debugger (CAPEsolo)
+	int idbg;
 
 	// Fake RDTSC
 	int fake_rdtsc;
@@ -231,6 +243,7 @@ struct _g_config {
 
 	// YARA scans
 	int yarascan;
+	int yara_timeout;
 
 	// AMSI dumps (Win10+)
 	int amsidump;

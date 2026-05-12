@@ -41,6 +41,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define PrintEAX		3
 
 extern void DebugOutput(_In_ LPCTSTR lpOutputString, ...);
+extern void ProcessMessage(DWORD ProcessId, DWORD ThreadId);
 extern char *our_dll_path;
 extern char *our_process_name;
 extern wchar_t *our_process_path_w;
@@ -249,7 +250,10 @@ void parse_config_line(char* line)
 		}
 		else if (!strcmp(key, "dump-limit")) { //Override the default dump limit of 10 payloads
 			g_config.dump_limit = (unsigned int)strtoul(value, NULL, 10);
-			DebugOutput("Dropped file limit set to %d.\n", g_config.dump_limit);
+			if (g_config.dump_limit)
+				DebugOutput("Payload capture limit set to %d.\n", g_config.dump_limit);
+			else
+				DebugOutput("Payload capture limit disabled.\n");
 		}
 		else if (!strcmp(key, "dropped-limit")) { //Override the default dropped file limit of 100 files
 			g_config.dropped_limit = (unsigned int)strtoul(value, NULL, 10);
@@ -264,10 +268,24 @@ void parse_config_line(char* line)
 		}
 		else if (!strcmp(key, "ntdll-protect")) {
 			g_config.ntdll_protect = (unsigned int)strtoul(value, NULL, 10);
-            if (g_config.ntdll_protect)
-                DebugOutput("Config: ntdll write protection enabled.");
+			if (g_config.ntdll_protect)
+				DebugOutput("Config: ntdll write protection enabled.");
+			else
+				DebugOutput("Config: ntdll write protection disabled.");
+		}
+		else if (!strcmp(key, "ntdll-unhook")) {
+			g_config.ntdll_unhook = (unsigned int)strtoul(value, NULL, 10);
+			if (g_config.ntdll_unhook)
+				DebugOutput("Config: ntdll unhook protection enabled.");
+			else
+				DebugOutput("Config: ntdll unhook protection disabled.");
+		}
+		else if (!strcmp(key, "hook-protect")) {
+			g_config.hook_protect = (unsigned int)strtoul(value, NULL, 10);
+            if (g_config.hook_protect)
+                DebugOutput("Config: hook write protection enabled.");
             else
-                DebugOutput("Config: ntdll write protection disabled.");
+                DebugOutput("Config: hook write protection disabled.");
 		}
 		else if (!strcmp(key, "ntdll-remap")) {
 			g_config.ntdll_remap = (unsigned int)strtoul(value, NULL, 10);
@@ -289,6 +307,21 @@ void parse_config_line(char* line)
 					*p2 = '\0';
 				}
 				g_config.excluded_apinames[x++] = strdup(p);
+				if (p2 == NULL)
+					break;
+				p = p2 + 1;
+			}
+		}
+		else if (!strcmp(key, "include-apis")) { // Only include the colon-separated list of APIs
+			unsigned int x = 0;
+			char *p2;
+			p = value;
+			while (p && x < EXCLUSION_MAX) {
+				p2 = strchr(p, ':');
+				if (p2) {
+					*p2 = '\0';
+				}
+				g_config.included_apinames[x++] = strdup(p);
 				if (p2 == NULL)
 					break;
 				p = p2 + 1;
@@ -1227,7 +1260,7 @@ void parse_config_line(char* line)
 			else
 				DebugOutput("Full process memory dumps disabled.\n");
 		}
-		else if (!stricmp(key, "import_reconstruction")) {
+		else if (!stricmp(key, "import-reconstruction") || !stricmp(key, "imprec")) {
 			g_config.import_reconstruction = value[0] == '1';
 			if (g_config.import_reconstruction)
 				DebugOutput("Import reconstruction of process dumps enabled.\n");
@@ -1302,6 +1335,13 @@ void parse_config_line(char* line)
 			else
 				DebugOutput("In-monitor YARA scans disabled.\n");
 		}
+		else if (!stricmp(key, "yara-timeout")) {
+			g_config.yara_timeout = (int)strtol(value, NULL, 10);
+			if (g_config.yara_timeout <= 0)
+				DebugOutput("In-monitor YARA scan timeout set to unlimited.\n");
+			else
+				DebugOutput("In-monitor YARA scan timeout set to %d seconds.\n", g_config.yara_timeout);
+		}
 		else if (!stricmp(key, "amsidump")) {
 			g_config.amsidump = value[0] == '1';
 			if (g_config.amsidump)
@@ -1347,11 +1387,6 @@ void parse_config_line(char* line)
 			else
 				DebugOutput("Scans/dumps while loader lock held disabled.\n");
 		}
-		else if (!stricmp(key, "plugx")) {
-			g_config.plugx = value[0] == '1';
-			if (g_config.plugx)
-				DebugOutput("PlugX package enabled.\n");
-		}
 		else if (!stricmp(key, "syscall")) {
 			g_config.syscall = value[0] == '1';
 			if (g_config.syscall)
@@ -1375,6 +1410,11 @@ void parse_config_line(char* line)
 			if (g_config.interactive == 1)
 				DebugOutput("Interactive desktop enabled.\n");
 		}
+		else if (!stricmp(key, "idbg")) {
+			g_config.idbg = value[0] == '1';
+			if (g_config.idbg)
+				DebugOutput("Interactive debugger enabled (CAPEsolo)\n");
+		}
 		else if (!stricmp(key, "snaps")) {
 			g_config.snaps = value[0] == '1';
 			if (g_config.snaps)
@@ -1384,6 +1424,15 @@ void parse_config_line(char* line)
 			g_config.hook_watch = value[0] == '1';
 			if (g_config.hook_watch)
 				DebugOutput("Config: Hook watch enabled.\n");
+		}
+		else if (!stricmp(key, "monitor")) {
+			DWORD pid = (unsigned int)strtoul(value, NULL, 10);
+			if (!pid && !stricmp(value, "explorer"))
+				GetWindowThreadProcessId(GetShellWindow(), &pid);
+			if (pid) {
+				ProcessMessage(pid, 0);
+				DebugOutput("Config: Injected monitor into pid %d.\n", pid);
+			}
 		}
 		else if (stricmp(key, "no-iat"))
 			DebugOutput("Monitor config - unrecognised key %s.\n", key);
@@ -1419,6 +1468,7 @@ void read_config(void)
 	g_config.api_cap = 5000;
 	g_config.api_rate_cap = 1;
 	g_config.yarascan = 1;
+	g_config.yara_timeout = 1;
 	g_config.loaderlock_scans = 1;
 	g_config.syscall = 1;
 

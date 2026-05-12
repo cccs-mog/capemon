@@ -181,6 +181,7 @@ void raw_sleep(int msecs);
 DWORD randint(DWORD min, DWORD max);
 BOOL is_directory_objattr(const OBJECT_ATTRIBUTES *obj);
 BOOL file_exists(const OBJECT_ATTRIBUTES *obj);
+UNICODE_STRING* get_module_name(ULONG_PTR addr);
 void hide_module_from_peb(HMODULE module_handle);
 int path_is_system(const wchar_t *path_w);
 int path_is_program_files(const wchar_t *path_w);
@@ -257,8 +258,6 @@ extern DWORD g_our_dll_size;
 
 BOOLEAN is_address_in_monitor(ULONG_PTR address);
 BOOLEAN is_address_in_ntdll(ULONG_PTR address);
-BOOLEAN is_address_in_win32u(ULONG_PTR address);
-BOOLEAN is_address_in_user32(ULONG_PTR address);
 BOOLEAN is_image_base_remapped(HMODULE BaseAddress);
 void num_to_string(char *buf, unsigned int buflen, unsigned int num);
 
@@ -296,6 +295,7 @@ LONG WINAPI capemon_exception_handler(__in struct _EXCEPTION_POINTERS *Exception
 
 BOOLEAN prevent_module_unloading(PVOID BaseAddress);
 void prevent_module_reloading(PVOID *BaseAddress);
+void prevent_module_unhooking(PVOID buffer, wchar_t *filename);
 
 struct envstruct {
 	ULONG k;

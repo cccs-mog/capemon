@@ -71,6 +71,25 @@ void disable_tail_call_optimization(void)
 #define HOOK_EXERVA(funcname, timestamp, rva) {NULL, #funcname, NULL, NULL, \
 	&New_##funcname, (void **) &Old_##funcname, NULL, FALSE, FALSE, 0, FALSE, timestamp, rva}
 
+#define HOOK_COM(moniker) {NULL, #moniker, NULL, NULL, \
+    &New_##moniker, (void **) &Old_##moniker, NULL, FALSE, FALSE, 0, FALSE, 0, FALSE}
+
+#define HOOK_COM_WITHNAME(friendlyname, funcname) {NULL, #funcname, NULL, NULL, \
+    &New_##friendlyname, (void **) &Old_##friendlyname, NULL, FALSE, FALSE, 0, FALSE, 0, FALSE}
+
+
+com_hook_t g_com_hooks[] = {
+	{ HOOK_COM(WbemLocator_ConnectServer), &CLSID_WbemLocator, &IID_IWbemLocator },
+	{ HOOK_COM_WITHNAME(WMI_ExecQuery, IWbemServices_ExecQuery), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_ExecQueryAsync, IWbemServices_ExecQueryAsync), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_CreateInstanceEnum, IWbemServices_CreateInstanceEnum), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_CreateInstanceEnumAsync, IWbemServices_CreateInstanceEnumAsync), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_GetObject, IWbemServices_GetObjectW), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_GetObjectAsync, IWbemServices_GetObjectAsync), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_ExecMethod, IWbemServices_ExecMethod), NULL, NULL },
+	{ HOOK_COM_WITHNAME(WMI_ExecMethodAsync, IWbemServices_ExecMethodAsync), NULL, NULL },
+};
+
 hook_t full_hooks[] = {
 	// Process Hooks
 	HOOK_NOTAIL_ALT(ntdll, RtlDispatchException, 2),
@@ -120,6 +139,9 @@ hook_t full_hooks[] = {
 	HOOK(kernel32, Process32NextW),
 	HOOK(kernel32, Module32FirstW),
 	HOOK(kernel32, Module32NextW),
+	HOOK(kernelbase, K32EnumProcesses),
+	HOOK(wtsapi32, WTSEnumerateProcessesW),
+	HOOK(wtsapi32, WTSEnumerateProcessesExW),
 	HOOK(kernel32, CreateProcessA),
 	HOOK(kernel32, CreateProcessW),
 	HOOK(kernel32, WinExec),
@@ -138,8 +160,12 @@ hook_t full_hooks[] = {
 	HOOK(ntdll, NtQueueApcThreadEx),
 	HOOK(ntdll, NtOpenThread),
 	HOOK(ntdll, NtGetContextThread),
-	HOOK(ntdll, RtlWow64GetThreadContext),
 	HOOK(ntdll, NtSetContextThread),
+	HOOK_NOTAIL(ntdll, RtlUserThreadStart, 2),
+#ifdef _WIN64
+	HOOK(ntdll, RtlWow64GetThreadContext),
+	HOOK(ntdll, RtlWow64SetThreadContext),
+#endif
 	HOOK(ntdll, NtSuspendThread),
 	HOOK(ntdll, NtResumeThread),
 	HOOK(ntdll, NtAlertResumeThread),
@@ -150,6 +176,8 @@ hook_t full_hooks[] = {
 	HOOK(ntdll, NtContinue),
 	HOOK(ntdll, NtContinueEx),
 	HOOK(ntdll, NtTestAlert),
+	HOOK(kernelbase, SetThreadStackGuarantee),
+	HOOK(kernelbase, SetThreadDescription),
 	HOOK(kernel32, CreateThread),
 	HOOK(kernel32, CreateRemoteThread),
 	HOOK(kernel32, CreateRemoteThreadEx),
@@ -178,15 +206,11 @@ hook_t full_hooks[] = {
 	// WMI Hooks
 #ifdef _WIN64
 	HOOK_WITHNAME(fastprox, WMI_Get, "?Get@CWbemObject@@UEAAJPEBGJPEAUtagVARIANT@@PEAJ2@Z"),
+	HOOK_WITHNAME(fastprox, WMI_Next, "?Next@CWbemObject@@UEAAJJPEAPEAGPEAUtagVARIANT@@PEAJ2@Z"),
 #else
 	HOOK_WITHNAME(fastprox, WMI_Get, "?Get@CWbemObject@@UAGJPBGJPAUtagVARIANT@@PAJ2@Z"),
+	HOOK_WITHNAME(fastprox, WMI_Next, "?Next@CWbemObject@@UAGJJPAPAGPAUtagVARIANT@@PAJ2@Z"),
 #endif
-	HOOK_NOTAIL(fastprox, WMI_ExecQuery, 6),
-	HOOK_NOTAIL(fastprox, WMI_ExecMethod, 8),
-	HOOK_NOTAIL(fastprox, WMI_ExecQueryAsync, 6),
-	HOOK_NOTAIL(fastprox, WMI_ExecMethodAsync, 7),
-	HOOK_NOTAIL(fastprox, WMI_GetObject, 6),
-	HOOK_NOTAIL(fastprox, WMI_GetObjectAsync, 5),
 
 	// File Hooks
 	HOOK(ntdll, NtQueryAttributesFile),
@@ -356,10 +380,6 @@ hook_t full_hooks[] = {
 	HOOK(ntdll, NtQueryInformationAtom),
 
 	// Misc Hooks
-#ifndef _WIN64
-	HOOK(ntdll, memcpy),
-#endif
-	HOOK(msvcrt, memcpy),
 	//HOOK(ntdll, RtlMoveMemory),
 	HOOK(kernel32, GetCommandLineA),
 	HOOK(kernel32, GetCommandLineW),
@@ -373,9 +393,12 @@ hook_t full_hooks[] = {
 	HOOK(user32, SetWindowsHookExW),
 	HOOK(user32, UnhookWindowsHookEx),
 	HOOK(kernel32, SetUnhandledExceptionFilter),
+	HOOK(kernel32, UnhandledExceptionFilter),
 	HOOK(ntdll, RtlAddVectoredExceptionHandler),
+	HOOK(ntdll, RtlRemoveVectoredExceptionHandler),
 	HOOK(kernel32, SetErrorMode),
 	HOOK(ntdll, LdrGetDllHandle),
+	HOOK(ntdll, LdrGetDllHandleEx),
 	HOOK(ntdll, LdrGetProcedureAddress),
 	HOOK(ntdll, LdrGetProcedureAddressForCaller),
 	HOOK(kernel32, DeviceIoControl),
@@ -425,6 +448,7 @@ hook_t full_hooks[] = {
 	//HOOK(ole32, OleConvertOLESTREAMToIStorage),
 	HOOK(kernel32, GlobalMemoryStatus),
 	HOOK(kernel32, GlobalMemoryStatusEx),
+	HOOK(kernel32, GetPhysicallyInstalledSystemMemory),
 	HOOK(user32, SystemParametersInfoA),
 	HOOK(user32, SystemParametersInfoW),
 	HOOK(pstorec, PStoreCreateInstance),
@@ -532,6 +556,8 @@ hook_t full_hooks[] = {
 	HOOK(iphlpapi, GetAdaptersAddresses),
 	HOOK(iphlpapi, GetAdaptersInfo),
 	HOOK(urlmon, CoInternetSetFeatureEnabled),
+	HOOK(ole32, MkParseDisplayName),
+	HOOK(urlmon, MkParseDisplayNameEx),
 
 	// Service Hooks
 	HOOK(advapi32, OpenSCManagerA),
@@ -636,6 +662,7 @@ hook_t full_hooks[] = {
 	HOOK(advapi32, CryptImportKey),
 	HOOK(wintrust, HTTPSCertificateTrust),
 	HOOK(wintrust, HTTPSFinalProv),
+	HOOK(wintrust, WTGetSignatureInfo),
 	HOOK(crypt32, CryptDecodeObjectEx),
 	HOOK(crypt32, CryptImportPublicKeyInfo),
 	HOOK(ncrypt, NCryptImportKey),
@@ -876,7 +903,10 @@ hook_t native_hooks[] = {
 	HOOK(ntdll, NtQueueApcThreadEx),
 	HOOK(ntdll, NtOpenThread),
 	HOOK(ntdll, NtGetContextThread),
+#ifdef _WIN64
 	HOOK(ntdll, RtlWow64GetThreadContext),
+	HOOK(ntdll, RtlWow64SetThreadContext),
+#endif
 	HOOK(ntdll, NtSetContextThread),
 	HOOK(ntdll, NtSuspendThread),
 	HOOK(ntdll, NtResumeThread),
@@ -1278,10 +1308,6 @@ hook_t office_hooks[] = {
 	HOOK(kernel32, SwitchToThread),
 
 	// Misc Hooks
-#ifndef _WIN64
-	//HOOK(ntdll, memcpy),
-#endif
-	//HOOK(msvcrt, memcpy),
 	//HOOK(ntdll, RtlMoveMemory),
 	HOOK(kernel32, OutputDebugStringA),
 	HOOK(kernel32, OutputDebugStringW),
@@ -1716,6 +1742,18 @@ void set_hooks_exe(void)
 
 }
 
+BOOL dll_is_hooked(const wchar_t *library)
+{
+	if (!library)
+		return FALSE;
+	BOOL ret = FALSE;
+	for (unsigned int i = 0; i < hooks_arraysize; i++) {
+		if (!wcsicmp((hooks+i)->library, library))
+			ret = TRUE;
+	}
+	return ret;
+}
+
 void set_hooks_by_export_directory(const wchar_t *exportdirectory, const wchar_t *library)
 {
 	unsigned int Hooked = 0;
@@ -1741,7 +1779,6 @@ void set_hooks_by_export_directory(const wchar_t *exportdirectory, const wchar_t
 			}
 		}
 	}
-	DebugOutput("set_hooks_by_export_directory: Hooked %d out of %d functions\n", Hooked, hooks_arraysize);
 }
 
 extern void invalidate_regions_for_hook(const hook_t *hook);
@@ -1754,6 +1791,114 @@ void revalidate_all_hooks(void)
 			(hooks+i)->hook_addr = NULL;
 			invalidate_regions_for_hook(hooks+i);
 		}
+	}
+}
+
+static com_hook_t* com_hooks = NULL;
+static int num_com_hooks = 0;
+static int num_com_hooks_installed = 0;
+static int* com_hook_state = NULL;
+int com_hooks_initialized = 0;
+
+void init_com_hooks(void) {
+	com_hooks = g_com_hooks;
+	num_com_hooks = ARRAYSIZE(g_com_hooks);
+	com_hook_state = calloc(sizeof(*com_hook_state), num_com_hooks);
+}
+
+int set_WbemLocator_hooks(PVOID pComObject, hook_t* hook) {
+	IWbemLocator* pIWebmLocator = (IWbemLocator*)pComObject;
+	DWORD old_protect;
+	VirtualProtect(hook, sizeof(*hook), PAGE_EXECUTE_READWRITE, &old_protect);
+	if (!strncmp(hook->funcname, "WbemLocator_ConnectServer", 25))
+		hook->addr = pIWebmLocator->lpVtbl->ConnectServer;
+	if (hook->addr) {
+		return hook_api(hook, g_config.hook_type);
+	}
+
+	return -1;
+}
+
+int set_IWbemServices_hooks(PVOID pComObject, hook_t* hook) {
+	IWbemServices* pIWbemServices = (IWbemServices*)pComObject;
+	DWORD old_protect;
+	VirtualProtect(hook, sizeof(*hook), PAGE_EXECUTE_READWRITE, &old_protect);
+	if (!strcmp(hook->funcname, "IWbemServices_ExecQuery")) {
+		hook->addr = pIWbemServices->lpVtbl->ExecQuery;
+	}
+	else if (!strncmp(hook->funcname, "IWbemServices_ExecQueryAsync", 28)) {
+		hook->addr = pIWbemServices->lpVtbl->ExecQueryAsync;
+	}
+	else if (!strncmp(hook->funcname, "IWbemServices_GetObjectW", 24)) {
+		hook->addr = pIWbemServices->lpVtbl->GetObject;
+	}
+	else if (!strncmp(hook->funcname, "IWbemServices_GetObjectAsync", 28)) {
+		hook->addr = pIWbemServices->lpVtbl->GetObjectAsync;
+	}
+	else if (!strcmp(hook->funcname, "IWbemServices_ExecMethod")) {
+		hook->addr = pIWbemServices->lpVtbl->ExecMethod;
+	}
+	else if (!strncmp(hook->funcname, "IWbemServices_ExecMethodAsync", 29)) {
+		hook->addr = pIWbemServices->lpVtbl->ExecMethodAsync;
+	}
+	else if (!strcmp(hook->funcname, "IWbemServices_CreateInstanceEnum")) {
+		hook->addr = pIWbemServices->lpVtbl->CreateInstanceEnum;
+	}
+	else if (!strncmp(hook->funcname, "IWbemServices_CreateInstanceEnumAsync", 37)) {
+		hook->addr = pIWbemServices->lpVtbl->CreateInstanceEnumAsync;
+	}
+	if (hook->addr) {
+		return hook_api(hook, g_config.hook_type);
+	}
+	return -1;
+}
+
+extern __declspec(thread) BOOL bHookViaWbemLocator;
+void set_com_hooks(REFCLSID	rclsid, REFIID riid, PVOID pComObject) {
+	if (!com_hooks_initialized) {
+		init_com_hooks();
+		com_hooks_initialized = 1;
+	}
+	if (num_com_hooks_installed < num_com_hooks) {
+		lasterror_t lasterrors;
+		get_lasterrors(&lasterrors);
+		__try {
+			for (int hook_idx = 0; hook_idx < num_com_hooks; hook_idx++) {
+				if (!com_hook_state[hook_idx]) {
+					int ret = 1;
+					com_hook_t* com_hook = &com_hooks[hook_idx];
+					hook_t* hook = &(com_hook->hook);
+					if (
+						(rclsid && com_hook->rclsid && IsEqualCLSID(rclsid, com_hook->rclsid)) || // Matches a CLSID we want to hook
+						(com_hook->riid && riid && IsEqualIID(riid, com_hook->riid)) || // Matches an IID we want to hook
+						(!rclsid && !riid) // Hook COM objects identified by funcname
+					) {
+						if (rclsid && riid) {
+							if (IsEqualCLSID(rclsid, &CLSID_WbemLocator) && IsEqualIID(riid, &IID_IWbemLocator)) {
+								ret = set_WbemLocator_hooks(pComObject, hook);
+							}
+						}
+						else if (!rclsid && !riid && !com_hook->rclsid && !com_hook->riid) {
+							if (bHookViaWbemLocator && !strncmp(hook->funcname, "IWbemServices_", 14)) {
+								ret = set_IWbemServices_hooks(pComObject, hook);
+							}
+						}
+					}
+					if (ret == 0) {
+						DebugOutput("Successfully installed hook on COM Object function %s", hook->funcname);
+						num_com_hooks_installed++;
+						com_hook_state[hook_idx] = 1;
+					}
+					else if (ret < 0) {
+						DebugOutput("WARNING: Unable to hook COM Object function %s", hook->funcname);
+					}
+				}
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			;
+		}
+		set_lasterrors(&lasterrors);
 	}
 }
 

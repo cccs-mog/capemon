@@ -98,7 +98,7 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 		return;
 	}
 
-	// We limit tracking to executable regions
+	// limit tracking to executable regions
 	if (!(Protect & EXECUTABLE_FLAGS))
 		return;
 
@@ -110,29 +110,31 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 	if (TrackedRegionList)
 		TrackedRegion = GetTrackedRegion(BaseAddress);
 
-	// if memory was previously reserved but not committed
+	// previously reserved but not committed
 	if (TrackedRegion && !TrackedRegion->Committed && (AllocationType & MEM_COMMIT))
 	{
 		DebugOutput("AllocationHandler: Previously reserved region at 0x%p, committing at: 0x%p.\n", TrackedRegion->AllocationBase, BaseAddress);
 		TrackedRegion->SubAllocation = TRUE;
 	}
+	// reserved
 	else if (TrackedRegion && (AllocationType & MEM_RESERVE))
 	{
 		DebugOutput("AllocationHandler: Re-reserving region at: 0x%p.\n", BaseAddress);
 		hook_enable();
 		return;
 	}
+	// within a region already tracked
 	else if (TrackedRegion)
 	{
-		// The region allocated is with a region already tracked
-		DebugOutput("AllocationHandler: Allocation already in tracked region list: 0x%p.\n", TrackedRegion->AllocationBase);
+		if (CurrentRegion && CurrentRegion != TrackedRegion)
+			DebugOutput("AllocationHandler: Allocation already in tracked region list: 0x%p.\n", TrackedRegion->AllocationBase);
 		hook_enable();
 		return;
 	}
 	else
 	{
 		if (TraceRunning)
-			DebuggerOutput("AllocationHandler: Adding allocation to tracked region list: 0x%p, size: 0x%x.\n", BaseAddress, RegionSize);
+			DebuggerOutput("AllocationHandler: Adding allocation to tracked region list: 0x%p, size: 0x%x ", BaseAddress, RegionSize);
 		else
 			DebugOutput("AllocationHandler: Adding allocation to tracked region list: 0x%p, size: 0x%x.\n", BaseAddress, RegionSize);
 		TrackedRegion = AddTrackedRegion(BaseAddress, Protect);
@@ -153,7 +155,7 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 	if (CurrentRegion && CurrentRegion != TrackedRegion && !TrackedRegion->SubAllocation && CurrentThread && CurrentThread == GetCurrentThreadId())
 	{
 		if (TraceRunning)
-			DebuggerOutput("AllocationHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
+			DebuggerOutput("AllocationHandler: Processing previous tracked region at: 0x%p ", CurrentRegion->AllocationBase);
 		else
 			DebugOutput("AllocationHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
 		ProcessTrackedRegion(CurrentRegion);
@@ -171,15 +173,15 @@ void AllocationHandler(PVOID BaseAddress, SIZE_T RegionSize, ULONG AllocationTyp
 			TrackedRegion->BreakpointsSet = ActivateBreakpoints(TrackedRegion, NULL);
 
 			if (TrackedRegion->BreakpointsSet)
-				DebuggerOutput("AllocationHandler: Breakpoints set on newly-allocated executable region at: 0x%p (size 0x%x).\n", BaseAddress, RegionSize);
+				DebuggerOutput("AllocationHandler: Breakpoints set on newly-allocated executable region at: 0x%p (size 0x%x) ", BaseAddress, RegionSize);
 			else
-				DebuggerOutput("AllocationHandler: Error - unable to activate breakpoints around address 0x%p.\n", BaseAddress);
+				DebuggerOutput("AllocationHandler: Error - unable to activate breakpoints around address 0x%p ", BaseAddress);
 		}
 		else if (Protect & EXECUTABLE_FLAGS)
 			TrackedRegion->CanDump = TRUE;
 	}
 	else
-	{   // Allocation not committed, so we can't set breakpoints yet
+	{   // Allocation not committed
 		TrackedRegion->Committed = FALSE;
 		DebugOutput("AllocationHandler: Memory region (size 0x%x) reserved but not committed at 0x%p.\n", RegionSize, BaseAddress);
 	}
@@ -216,7 +218,7 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 	if (!TrackedRegion)
 	{
 		if (TraceRunning)
-			DebuggerOutput("ProtectionHandler: Adding region at 0x%p to tracked regions.\n", Address);
+			DebuggerOutput("ProtectionHandler: Adding region at 0x%p to tracked regions ", Address);
 		else
 			DebugOutput("ProtectionHandler: Adding region at 0x%p to tracked regions.\n", Address);
 		TrackedRegion = AddTrackedRegion(Address, Protect);
@@ -240,7 +242,7 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 	if (CurrentRegion && CurrentRegion != TrackedRegion && CurrentThread && CurrentThread == GetCurrentThreadId())
 	{
 		if (TraceRunning)
-			DebuggerOutput("ProtectionHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
+			DebuggerOutput("ProtectionHandler: Processing previous tracked region at: 0x%p ", CurrentRegion->AllocationBase);
 		else
 			DebugOutput("ProtectionHandler: Processing previous tracked region at: 0x%p.\n", CurrentRegion->AllocationBase);
 		ProcessTrackedRegion(CurrentRegion);
@@ -284,9 +286,9 @@ void ProtectionHandler(PVOID Address, ULONG Protect, PULONG OldProtect)
 		TrackedRegion->BreakpointsSet = ActivateBreakpoints(TrackedRegion, NULL);
 
 		if (TrackedRegion->BreakpointsSet)
-			DebuggerOutput("ProtectionHandler: Breakpoints set on executable region at: 0x%p.\n", Address);
+			DebuggerOutput("ProtectionHandler: Breakpoints set on executable region at: 0x%p ", Address);
 		else
-			DebuggerOutput("ProtectionHandler: Error - unable to activate breakpoints around address 0x%p.\n", Address);
+			DebuggerOutput("ProtectionHandler: Error - unable to activate breakpoints around address 0x%p ", Address);
 	}
 	else if (!TrackedRegion->PagesDumped)
 		TrackedRegion->CanDump = TRUE;
@@ -328,8 +330,6 @@ void FreeHandler(PVOID BaseAddress)
 	}
 
 	ClearTrackedRegion(TrackedRegion);
-
-	DropTrackedRegion(TrackedRegion);
 
 	hook_enable();
 
@@ -1451,7 +1451,7 @@ BOOL ActivateBreakpoints(PTRACKEDREGION TrackedRegion, struct _EXCEPTION_POINTER
 	}
 
 	if (TrackedRegion->Address && TrackedRegion->Address != TrackedRegion->AllocationBase)
-		// we want to put a breakpoint on the protected address
+		// want to put a breakpoint on the protected address
 		TrackedRegion->ExecBp = TrackedRegion->Address;
 	else
 		TrackedRegion->ExecBp = TrackedRegion->AllocationBase;
@@ -1463,7 +1463,7 @@ BOOL ActivateBreakpoints(PTRACKEDREGION TrackedRegion, struct _EXCEPTION_POINTER
 	// If ExecBp points to non-zero we assume code
 	if (*(BYTE*)TrackedRegion->ExecBp)
 	{
-		// We set the initial 'execute' breakpoint
+		// Set the initial 'execute' breakpoint
 		if (ExceptionInfo == NULL)
 		{
 			if (!SetNextAvailableBreakpoint(GetCurrentThreadId(), &TrackedRegion->ExecBpRegister, 0, (BYTE*)TrackedRegion->ExecBp, BP_EXEC, 0, ShellcodeExecCallback))
@@ -1489,7 +1489,7 @@ BOOL ActivateBreakpoints(PTRACKEDREGION TrackedRegion, struct _EXCEPTION_POINTER
 	}
 	else
 	{
-		// We set a write breakpoint instead
+		// Set a write breakpoint instead
 		if (ExceptionInfo == NULL)
 		{
 			if (!SetNextAvailableBreakpoint(GetCurrentThreadId(), &TrackedRegion->ExecBpRegister, sizeof(WORD), (BYTE*)TrackedRegion->ExecBp, BP_WRITE, 0, BaseAddressWriteCallback))
@@ -1514,7 +1514,7 @@ BOOL ActivateBreakpoints(PTRACKEDREGION TrackedRegion, struct _EXCEPTION_POINTER
 		}
 	}
 
-	// We also set a write bp on 'e_lfanew' address to begin our PE-write detection chain
+	// Set a write bp on 'e_lfanew' address to begin our PE-write detection chain
 	pDosHeader = (PIMAGE_DOS_HEADER)TrackedRegion->AllocationBase;
 
 	if (ExceptionInfo == NULL)
@@ -1548,7 +1548,7 @@ void UnpackerInit()
 	if (!InitialiseDebugger())
 		DebugOutput("UnpackerInit: Failed to initialise debugger.\n");
 
-	// Add the monitor to tracked regions
+	// Add the monitor to tracked regions but set as dumped
 	PTRACKEDREGION TrackedRegion = AddTrackedRegion((PVOID)g_our_dll_base, 0);
 	if (TrackedRegion)
 	{

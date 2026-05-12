@@ -292,6 +292,11 @@ static void log_wstring(const wchar_t *str, int length)
 
 static void log_variant(VARIANT* var) {
 	char log_msg[32];
+	if (!var) {
+		// Objects that we recurse into may be null, bail here
+		return;
+	}
+
 	__try {
 		switch (var->vt) {
 			case VT_NULL:
@@ -406,8 +411,12 @@ static void log_variant(VARIANT* var) {
 				log_int64((int64_t)*var->pdblVal);
 				break;
 			default:
-				snprintf(log_msg, 32, "Unhandled VARIANT Type: %hu", var->vt);
-				//log_string((const char*)var->vt, -1);
+				if (var->vt & VT_ARRAY)
+					log_string("Array", 5);
+				else {
+					snprintf(log_msg, 32, "Unhandled VARIANT Type: %hu", var->vt);
+					log_string(log_msg, -1);
+				}
 				break;
 		}
 	}

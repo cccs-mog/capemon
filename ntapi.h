@@ -30,6 +30,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+#define EXCEPTION_CHAIN_END ((PEXCEPTION_REGISTRATION_RECORD)-1)
+
 #ifndef _MSC_VER
 #define __out
 #define __in
@@ -620,7 +622,7 @@ typedef struct _PEB {
 	PVOID PostProcessInitRoutine;
 	BYTE Reserved4[136];
 	ULONG SessionId;
-} PEB;
+} PEB, *PPEB;
 #else
 typedef struct _PEB {
 	BOOLEAN InheritedAddressSpace;
@@ -679,6 +681,18 @@ typedef struct _PEB {
 	ULONG   SessionId;
 } PEB, *PPEB;
 #endif
+
+typedef struct _TEB
+{
+	NT_TIB NtTib;
+	PVOID EnvironmentPointer;
+	CLIENT_ID ClientId;
+	PVOID ActiveRpcHandle;
+	PVOID ThreadLocalStoragePointer;
+	PPEB ProcessEnvironmentBlock;
+	ULONG LastErrorValue;
+// truncated
+} TEB, *PTEB;
 
 typedef enum _DBG_STATE
 {
@@ -1018,6 +1032,13 @@ typedef struct _TIMER_SET_COALESCABLE_TIMER_INFO {
 	ULONG TolerableDelay;
 	PBOOLEAN PreviousState;
 } TIMER_SET_COALESCABLE_TIMER_INFO, *PTIMER_SET_COALESCABLE_TIMER_INFO;
+
+typedef struct _WTS_PROCESS_INFOW {
+	DWORD  SessionId;
+	DWORD  ProcessId;
+	LPWSTR pProcessName;
+	PSID   pUserSid;
+} WTS_PROCESS_INFOW, *PWTS_PROCESS_INFOW;
 
 typedef BOOL(WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
 
